@@ -1,8 +1,9 @@
 {-# LANGUAGE Rank2Types #-}
-module Control.Arrow.MapReduce.Parallel where
+module Control.Arrow.MapReduce.Parallel (MRParallel) where
 
 import Control.Arrow.MapReduce.Class
 import Control.Arrow.MapReduce.Types
+import Control.Arrow.MapReduce.Sharder
 
 import Control.Input.Class
 import Control.Output.Class
@@ -10,7 +11,7 @@ import Control.Output.Class
 import Control.Category
 import Control.Cofunctor
 import Control.Arrow
-import Control.Monad
+import Control.Monad hiding (replicateM)
 import Control.Exception
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
@@ -18,7 +19,10 @@ import Control.Concurrent.Chan.Endable
 
 import GHC.Conc
 
-import Prelude hiding ((.))
+import Data.Vector
+import qualified Data.Vector as V
+
+import Prelude hiding ((.), unzip)
 
 newtype MRParallel input output = MRParallel (forall x . 
   MRInput (x, input)
