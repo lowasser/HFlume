@@ -34,6 +34,7 @@ instance Category MRParallel where
     flag <- newEmptyMVar
     forkIO $ do
       mapInputM_ (emit output) input
+      reportEnd output
       putMVar flag ()
     return (takeMVar flag)
   MRParallel f . MRParallel g = MRParallel $ \ input output -> do
@@ -51,6 +52,7 @@ instance Arrow MRParallel where
     flag <- newEmptyMVar
     forkIO $ do
       mapInputM_ (emit output . fmap f) input
+      reportEnd output
       putMVar flag ()
     return (takeMVar flag)
   first (MRParallel run) = MRParallel $ \ input output ->
