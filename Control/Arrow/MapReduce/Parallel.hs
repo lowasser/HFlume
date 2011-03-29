@@ -107,3 +107,18 @@ instance ArrowChoice MRParallel where
     leftTerm <- runLeft leftIn output
     rightTerm <- runRight rightIn output
     return (takeMVar inSem >> leftTerm >> rightTerm)
+
+instance ArrowZero MRParallel where
+  zeroArrow = MRParallel $ \ _ _ -> return (return ())
+
+instance ArrowPlus MRParallel where
+  MRParallel run1 <+> MRParallel run2 = MRParallel $ \ input output -> do
+    (pipe1, in1) <- newPipe
+    (pipe2, in2) <- newPipe
+    inSem <- newEmptyMVar
+    forkIO $ do
+      mapInputM_ (\ a -> emit pipe1 a >> emit pipe2 a) input
+      putMVar inSem ()
+    term1 <- run1 in1 output
+    term2 <- run2 in2 output
+    return (takeMVar inSem >> term1 >> term2)
