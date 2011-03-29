@@ -5,9 +5,8 @@ import Control.Arrow.MapReduce.Class
 import Control.Arrow.MapReduce.Types
 import Control.Arrow.MapReduce.Sharder
 
-import Control.Sink.Class
 import Control.Source.Class
-import Control.Sink.Fan
+import Control.Sink
 
 import Control.Category
 import Control.Cofunctor

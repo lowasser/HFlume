@@ -2,11 +2,8 @@
 module Control.Arrow.MapReduce.Types where
 
 import Control.Concurrent.Chan.Endable
-import Control.Source.Class
-import Control.Sink.Class
-import Control.Source.Mapped
-import Control.Sink.Mapped
-import Control.Sink.Fan
+import Control.Source
+import Control.Sink
 import Control.Cofunctor
 
 data MRSource a where
