@@ -66,22 +66,26 @@ instance ArrowChoice MRParallel where
   left (MRParallel run) = MRParallel $ \ input output -> do
     inSem <- newEmptyMVar
     (leftOut, runInput) <- newPipe
-    let runOutput = cofmap (fmap Left) output
+    (outL, outR) <- fanOutput output
+    let runOutput = cofmap (fmap Left) outL
     forkIO $ do
       mapInputM_ (\ (x, i) -> case i of
 	Left a	-> emit leftOut (x, a)
-	Right b	-> emit output (x, Right b)) input
+	Right b	-> emit outR (x, Right b)) input
+      reportEnd outR
       putMVar inSem ()
     leftTerm <- run runInput runOutput
     return (takeMVar inSem >> leftTerm)
   right (MRParallel run) = MRParallel $ \ input output -> do
     inSem <- newEmptyMVar
     (rightOut, runInput) <- newPipe
-    let runOutput = cofmap (fmap Right) output
+    (outL, outR) <- fanOutput output
+    let runOutput = cofmap (fmap Right) outR
     forkIO $ do
       mapInputM_ (\ (x, i) -> case i of
 	Right a	-> emit rightOut (x, a)
-	Left b	-> emit output (x, Left b)) input
+	Left b	-> emit outL (x, Left b)) input
+      reportEnd outL
       putMVar inSem ()
     rightTerm <- run runInput runOutput
     return (takeMVar inSem >> rightTerm)
@@ -89,8 +93,9 @@ instance ArrowChoice MRParallel where
     inSem <- newEmptyMVar
     (leftPipe, leftIn) <- newPipe
     (rightPipe, rightIn) <- newPipe
-    let leftOut = cofmap (fmap Left) output
-	rightOut = cofmap (fmap Right) output
+    (leftOut0, rightOut0) <- fanOutput output
+    let leftOut = cofmap (fmap Left) leftOut0
+	rightOut = cofmap (fmap Right) rightOut0
     forkIO $ do
       mapInputM_ (\ (x, i) -> case i of
 	Left a	-> emit leftPipe (x, a)
@@ -103,13 +108,14 @@ instance ArrowChoice MRParallel where
     inSem <- newEmptyMVar
     (leftPipe, leftIn) <- newPipe
     (rightPipe, rightIn) <- newPipe
+    (leftOut, rightOut) <- fanOutput output
     forkIO $ do
       mapInputM_ (\ (x, i) -> case i of
 	Left a	-> emit leftPipe (x, a)
 	Right b	-> emit rightPipe (x, b)) input
       putMVar inSem ()
-    leftTerm <- runLeft leftIn output
-    rightTerm <- runRight rightIn output
+    leftTerm <- runLeft leftIn leftOut
+    rightTerm <- runRight rightIn rightOut
     return (takeMVar inSem >> leftTerm >> rightTerm)
 
 instance ArrowZero MRParallel where
@@ -123,6 +129,7 @@ instance ArrowPlus MRParallel where
     forkIO $ do
       mapInputM_ (\ a -> emit pipe1 a >> emit pipe2 a) input
       putMVar inSem ()
-    term1 <- run1 in1 output
-    term2 <- run2 in2 output
+    (out1, out2) <- fanOutput output
+    term1 <- run1 in1 out1
+    term2 <- run2 in2 out2
     return (takeMVar inSem >> term1 >> term2)
