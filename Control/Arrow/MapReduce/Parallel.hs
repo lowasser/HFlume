@@ -4,9 +4,7 @@ module Control.Arrow.MapReduce.Parallel (MRParallel) where
 import Control.Arrow.MapReduce.Class
 import Control.Arrow.MapReduce.Types
 import Control.Arrow.MapReduce.Sharder
-
-import Control.Source.Class
-import Control.Sink
+import Control.Arrow.MapReduce.KeySplitter
 
 import Control.Category
 import Control.Cofunctor
@@ -16,6 +14,10 @@ import Control.Exception
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 import Control.Concurrent.Chan.Endable
+import Control.Concurrent.Barrier
+
+import Control.Sink.Class
+import Control.Source.Class
 
 import GHC.Conc
 
@@ -136,12 +138,33 @@ instance ArrowPlus MRParallel where
     term2 <- run2 in2 out2
     return (takeMVar inSem >> term1 >> term2)
 
-mapper :: Int -> Mapper b k c -> MRParallel b (k, c)
-mapper nMappers mapper = MRParallel $ \ input output -> do
+mapper :: Int -> Mapper a k b -> MRParallel a (k, b)
+mapper nMappers theMap = MRParallel $ \ input output -> do
   sem <- newEmptyMVar
   outputs <- fanN nMappers output
   forM_ outputs $ \ myOut -> forkIO $ do
-    mapper input myOut
+    theMap input myOut
     putMVar sem ()
   return (replicateM_ nMappers (takeMVar sem))
 
+reducer :: Eq k => Reducer k a b -> MRParallel (k, a) b
+reducer theReduce = MRParallel $ \ input output -> do
+  barrier <- newBarrier
+  addBarrier barrier (reportEnd output)
+  shardOut <- newKeySplitter $ \ k -> do
+    (kSnk, kSrc) <- newPipe
+    kOut <- fan' output
+    kSem <- newEmptyMVar
+    addBarrier barrier (takeMVar kSem)
+    forkIO $ do
+      theReduce k kSrc kOut
+      putMVar kSem ()
+    return kSnk
+  sem <- newEmptyMVar
+  addBarrier barrier (takeMVar sem)
+  forkIO $ do
+    mapSourceM_ (emit shardOut) input
+    reportEnd shardOut
+    putMVar sem ()
+  return (waitForBarrier barrier)
+    

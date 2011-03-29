@@ -5,6 +5,7 @@ import Control.Concurrent.Chan.Endable
 import Control.Source
 import Control.Sink
 import Control.Cofunctor
+import qualified Control.Sink as Sink
 
 data MRSource a where
   MRSource :: Source src => src a -> MRSource a
@@ -40,3 +41,6 @@ fanN :: Int -> MRSink a -> IO [MRSink a]
 fanN n (MRSink dst) = do
   dsts <- fanSinkN n dst
   return (map MRSink dsts)
+
+fan' :: MRSink a -> IO (MRSink a)
+fan' (MRSink dst) = fmap MRSink (Sink.fan' dst)
