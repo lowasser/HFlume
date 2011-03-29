@@ -1,20 +1,20 @@
 {-# LANGUAGE GADTs #-}
 module Control.Arrow.MapReduce.KeySplitter where
 
-import Control.Output.Class
+import Control.Sink.Class
 import Control.Monad
 import Control.Concurrent.MVar
 
 data KeySplitter f a where
-  KeySplitter :: Eq k => !(MVar [(k, f (x, a))]) -> (k -> IO (f (x, a))) -> KeySplitter f (k, x, a)
+  KeySplitter :: Eq k => !(MVar [(k, f (x, a))]) -> (k -> IO (f (x, a))) -> KeySplitter f (x, (k, a))
 
-newKeySplitter :: Eq k => (k -> IO (f (x, a))) -> IO (KeySplitter f a)
+newKeySplitter :: Eq k => (k -> IO (f (x, a))) -> IO (KeySplitter f (x, (k, a)))
 newKeySplitter newKeyMaker = do
   outsVar <- newMVar []
   return (KeySplitter outsVar newKeyMaker)
 
-instance Output f => Output (KeySplitter f) where
-  emit (KeySplitter outsVar newKey) (k, x, a) = modifyMVar_ outsVar $ let
+instance Sink f => Sink (KeySplitter f) where
+  emit (KeySplitter outsVar newKey) (x, (k, a)) = modifyMVar_ outsVar $ let
     emitter outs0@((k', kOut):_)
       | k == k'	= emit kOut (x, a) >> return outs0
     emitter (kOut:outs)

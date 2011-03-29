@@ -144,3 +144,4 @@ mapper nMappers mapper = MRParallel $ \ input output -> do
     mapper input myOut
     putMVar sem ()
   return (replicateM_ nMappers (takeMVar sem))
+
