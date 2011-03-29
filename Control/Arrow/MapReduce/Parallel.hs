@@ -5,8 +5,9 @@ import Control.Arrow.MapReduce.Class
 import Control.Arrow.MapReduce.Types
 import Control.Arrow.MapReduce.Sharder
 
-import Control.Input.Class
-import Control.Output.Class
+import Control.Sink.Class
+import Control.Source.Class
+import Control.Sink.Fan
 
 import Control.Category
 import Control.Cofunctor
@@ -25,15 +26,15 @@ import qualified Data.Vector as V
 import Prelude hiding ((.), unzip)
 
 newtype MRParallel input output = MRParallel (forall x . 
-  MRInput (x, input)
-  -> MROutput (x, output)
+  MRSource (x, input)
+  -> MRSink (x, output)
   -> IO (IO ())) -- returns a "wait till done" command
 
 instance Category MRParallel where
   id = MRParallel $ \ input output -> do
     flag <- newEmptyMVar
     forkIO $ do
-      mapInputM_ (emit output) input
+      mapSourceM_ (emit output) input
       reportEnd output
       putMVar flag ()
     return (takeMVar flag)
@@ -51,55 +52,55 @@ instance Arrow MRParallel where
   arr f = MRParallel $ \ input output -> do -- not strict
     flag <- newEmptyMVar
     forkIO $ do
-      mapInputM_ (emit output . fmap f) input
+      mapSourceM_ (emit output . fmap f) input
       reportEnd output
       putMVar flag ()
     return (takeMVar flag)
   first (MRParallel run) = MRParallel $ \ input output ->
-    let runInput = fmap (\ (x, (a, b)) -> ((x, b), a)) input
+    let runSource = fmap (\ (x, (a, b)) -> ((x, b), a)) input
 	runOutput = cofmap (\ ((x, b), a) -> (x, (a, b))) output
-    in run runInput runOutput
+    in run runSource runOutput
   second (MRParallel run) = MRParallel $ \ input output ->
-    let runInput = fmap (\ (x, (a, b)) -> ((x, a), b)) input
+    let runSource = fmap (\ (x, (a, b)) -> ((x, a), b)) input
 	runOutput = cofmap (\ ((x, a), b) -> (x, (a, b))) output
-    in run runInput runOutput
+    in run runSource runOutput
 
 instance ArrowChoice MRParallel where
   left (MRParallel run) = MRParallel $ \ input output -> do
     inSem <- newEmptyMVar
-    (leftOut, runInput) <- newPipe
-    (outL, outR) <- fanOutput output
+    (leftOut, runSource) <- newPipe
+    (outL, outR) <- fan output
     let runOutput = cofmap (fmap Left) outL
     forkIO $ do
-      mapInputM_ (\ (x, i) -> case i of
+      mapSourceM_ (\ (x, i) -> case i of
 	Left a	-> emit leftOut (x, a)
 	Right b	-> emit outR (x, Right b)) input
       reportEnd outR
       putMVar inSem ()
-    leftTerm <- run runInput runOutput
+    leftTerm <- run runSource runOutput
     return (takeMVar inSem >> leftTerm)
   right (MRParallel run) = MRParallel $ \ input output -> do
     inSem <- newEmptyMVar
-    (rightOut, runInput) <- newPipe
-    (outL, outR) <- fanOutput output
+    (rightOut, runSource) <- newPipe
+    (outL, outR) <- fan output
     let runOutput = cofmap (fmap Right) outR
     forkIO $ do
-      mapInputM_ (\ (x, i) -> case i of
+      mapSourceM_ (\ (x, i) -> case i of
 	Right a	-> emit rightOut (x, a)
 	Left b	-> emit outL (x, Left b)) input
       reportEnd outL
       putMVar inSem ()
-    rightTerm <- run runInput runOutput
+    rightTerm <- run runSource runOutput
     return (takeMVar inSem >> rightTerm)
   MRParallel runLeft +++ MRParallel runRight = MRParallel $ \ input output -> do
     inSem <- newEmptyMVar
     (leftPipe, leftIn) <- newPipe
     (rightPipe, rightIn) <- newPipe
-    (leftOut0, rightOut0) <- fanOutput output
+    (leftOut0, rightOut0) <- fan output
     let leftOut = cofmap (fmap Left) leftOut0
 	rightOut = cofmap (fmap Right) rightOut0
     forkIO $ do
-      mapInputM_ (\ (x, i) -> case i of
+      mapSourceM_ (\ (x, i) -> case i of
 	Left a	-> emit leftPipe (x, a)
 	Right b	-> emit rightPipe (x, b)) input
       putMVar inSem ()
@@ -110,9 +111,9 @@ instance ArrowChoice MRParallel where
     inSem <- newEmptyMVar
     (leftPipe, leftIn) <- newPipe
     (rightPipe, rightIn) <- newPipe
-    (leftOut, rightOut) <- fanOutput output
+    (leftOut, rightOut) <- fan output
     forkIO $ do
-      mapInputM_ (\ (x, i) -> case i of
+      mapSourceM_ (\ (x, i) -> case i of
 	Left a	-> emit leftPipe (x, a)
 	Right b	-> emit rightPipe (x, b)) input
       putMVar inSem ()
@@ -129,9 +130,9 @@ instance ArrowPlus MRParallel where
     (pipe2, in2) <- newPipe
     inSem <- newEmptyMVar
     forkIO $ do
-      mapInputM_ (\ a -> emit pipe1 a >> emit pipe2 a) input
+      mapSourceM_ (\ a -> emit pipe1 a >> emit pipe2 a) input
       putMVar inSem ()
-    (out1, out2) <- fanOutput output
+    (out1, out2) <- fan output
     term1 <- run1 in1 out1
     term2 <- run2 in2 out2
     return (takeMVar inSem >> term1 >> term2)

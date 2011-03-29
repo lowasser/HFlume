@@ -2,61 +2,44 @@
 module Control.Arrow.MapReduce.Types where
 
 import Control.Concurrent.Chan.Endable
-import Control.Concurrent.MVar
-import Control.Input.Class
-import Control.Output.Class
+import Control.Source.Class
+import Control.Sink.Class
+import Control.Source.Mapped
+import Control.Sink.Mapped
+import Control.Sink.Fan
 import Control.Cofunctor
-import Control.Monad
 
-data MRInput a where
-  WrappedIn :: (b -> a) -> MRInput b -> MRInput a
-  SimpleIn :: Chan a -> MRInput a
+data MRSource a where
+  MRSource :: Source src => src a -> MRSource a
 
-data MROutput a where
-  WrappedOut :: (a -> b) -> MROutput b -> MROutput a
-  SimpleOut :: Chan a -> MROutput a
-  FannedOut :: MROutput a -> !(MVar Bool) -> !(MVar Bool) -> MROutput a
+data MRSink a where
+  MRSink :: Sink snk => snk a -> MRSink a
 
-instance Input MRInput where
-  tryGet (WrappedIn getMap src) = fmap (fmap getMap) (tryGet src)
-  tryGet (SimpleIn ch) = tryGet ch
-  isExhausted (WrappedIn _ src) = isExhausted src
-  isExhausted (SimpleIn ch) = isExhausted ch
+instance Sink MRSink where
+  emit (MRSink dst) a = emit dst a
+  reportEnd (MRSink dst) = reportEnd dst
 
-instance Output MROutput where
-  emit (WrappedOut putMap dest) a = emit dest (putMap a)
-  emit (SimpleOut ch) a = emit ch a
-  emit (FannedOut dest _ doneMe) a = withMVar doneMe $ \ isDoneMe ->
-    unless isDoneMe (emit dest a)
-  reportEnd (WrappedOut _ dest) = reportEnd dest
-  reportEnd (SimpleOut ch) = reportEnd ch
-  reportEnd (FannedOut dest doneOne doneMe) = modifyMVar_ doneMe $ \ isDoneMe -> do
-    unless isDoneMe $ do
-      modifyMVar_ doneOne $ \ isDoneOne -> do
-	when isDoneOne (reportEnd dest)
-	return True
-    return True
+instance Source MRSource where
+  tryGet (MRSource src) = tryGet src
+  isExhausted (MRSource src) = isExhausted src
 
-fanOutput :: MROutput a -> IO (MROutput a, MROutput a)
-fanOutput dest = do
-  doneEither <- newMVar False
-  done1 <- newMVar False
-  done2 <- newMVar False
-  return (FannedOut dest doneEither done1, FannedOut dest doneEither done2)
-
-newInput :: IO (MRInput a)
-newInput = fmap SimpleIn newChan
-
-newOutput :: IO (MROutput a)
-newOutput = fmap SimpleOut newChan
-
-instance Functor MRInput where
-  fmap = WrappedIn
-
-instance Cofunctor MROutput where
-  cofmap = WrappedOut
-
-newPipe :: IO (MROutput a, MRInput a)
+newPipe :: IO (MRSink a, MRSource a)
 newPipe = do
   ch <- newChan
-  return (SimpleOut ch, SimpleIn ch)
+  return (MRSink ch, MRSource ch)
+
+instance Cofunctor MRSink where
+  cofmap f (MRSink sink) = MRSink (MappedSink sink f)
+
+instance Functor MRSource where
+  fmap f (MRSource src) = MRSource (MappedSource src f)
+
+fan :: MRSink a -> IO (MRSink a, MRSink a)
+fan (MRSink dst) = do
+  (dst1, dst2) <- fanSink dst
+  return (MRSink dst1, MRSink dst2)
+
+fanN :: Int -> MRSink a -> IO [MRSink a]
+fanN n (MRSink dst) = do
+  dsts <- fanSinkN n dst
+  return (map MRSink dsts)
