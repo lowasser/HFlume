@@ -1,5 +1,5 @@
-{-# LANGUAGE TupleSections #-}
-module Control.Arrow.MapReduce.Class (ArrowMapReduce(..)) where
+{-# LANGUAGE TupleSections, Rank2Types #-}
+module Control.Arrow.MapReduce.Class (ArrowMapReduce(..), Mapper, Reducer) where
 
 import Data.Hashable (Hashable)
 import Control.DeepSeq
@@ -11,6 +11,9 @@ import Control.Sink.Class
 
 import Control.Arrow.MapReduce.Types
 
+type Mapper a k b = forall x . MRSource (x, a) -> MRSink (x, (k, b)) -> IO ()
+type Reducer k a b = forall x . k -> MRSource (x, a) -> MRSink (x, b) -> IO ()
+
 class Arrow a => ArrowMapReduce a where
   mapManyReduce :: (Eq k, Hashable k, NFData c, NFData d) => 
-    Int -> (MRSource (x, b) -> MRSink (k, x, c) -> IO ()) -> (k -> MRSource (x, c) -> MRSink (x, d) -> IO ()) -> a b d
+    Int -> Mapper b k c -> Reducer k c d -> a b d

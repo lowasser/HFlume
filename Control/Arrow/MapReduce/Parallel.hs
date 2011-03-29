@@ -19,7 +19,7 @@ import Control.Concurrent.Chan.Endable
 
 import GHC.Conc
 
-import Data.Vector
+import Data.Vector (Vector)
 import qualified Data.Vector as V
 
 import Prelude hiding ((.), unzip)
@@ -135,3 +135,12 @@ instance ArrowPlus MRParallel where
     term1 <- run1 in1 out1
     term2 <- run2 in2 out2
     return (takeMVar inSem >> term1 >> term2)
+
+mapper :: Int -> Mapper b k c -> MRParallel b (k, c)
+mapper nMappers mapper = MRParallel $ \ input output -> do
+  sem <- newEmptyMVar
+  outputs <- fanN nMappers output
+  forM_ outputs $ \ myOut -> forkIO $ do
+    mapper input myOut
+    putMVar sem ()
+  return (replicateM_ nMappers (takeMVar sem))
