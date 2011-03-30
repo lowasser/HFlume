@@ -39,6 +39,7 @@ runMRParallel m xs = do
   let readOut = fmap snd readOut0
   finish <- run m readIn writeOut
   mapM_ (emit writeIn) xs
+  reportEnd writeIn
   finish
   consumeSource readOut
 

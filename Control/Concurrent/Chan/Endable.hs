@@ -1,45 +1,55 @@
-{-# LANGUAGE RecordWildCards, DoAndIfThenElse, NamedFieldPuns #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# OPTIONS -funbox-strict-fields #-}
 module Control.Concurrent.Chan.Endable (Chan, newChan, writeChan, readChan, terminateChan, isEmptyChan) where
 
-import qualified Control.Concurrent.Chan as C
 import Control.Concurrent.MVar
 import Control.Monad
 import Control.Exception
 
-data Chan a = EChan 
-  {channel :: !(C.Chan (Message a)),
-    acceptsInput :: !(MVar Bool),
-    hasOutput :: !(MVar Bool)}
+import Data.Typeable
 
-data Message a = Msg a | Term
+data Chan a = Chan !(MVar (Stream a)) !(MVar (WriteEnd a))
+data WriteEnd a = StreamEnd | WriteHole !(Stream a)
+type Stream a = MVar (ChItem a)
+data ChItem a = ChItem a !(Stream a) | ChEnd
+
+data WriteToTerminatedStream = WriteToTerminatedStream deriving (Show, Typeable)
+
+instance Exception WriteToTerminatedStream
 
 newChan :: IO (Chan a)
 newChan = do
-  channel <- C.newChan
-  acceptsInput <- newMVar True
-  hasOutput <- newMVar True
-  return EChan{..}
+  hole <- newEmptyMVar
+  readVar <- newMVar hole
+  writeVar <- newMVar (WriteHole hole)
+  return (Chan readVar writeVar)
 
-writeChan :: Chan a -> a -> IO Bool
-writeChan EChan{..} a = withMVar acceptsInput $ \ isReady -> do
-  when isReady (C.writeChan channel (Msg a))
-  return isReady
+writeChan :: Chan a -> a -> IO ()
+writeChan (Chan _ writeVar) a = modifyMVar_ writeVar $ \ writeEnd -> case writeEnd of
+  StreamEnd	-> throwIO WriteToTerminatedStream
+  WriteHole old_hole -> do
+    new_hole <- newEmptyMVar
+    putMVar old_hole (ChItem a new_hole)
+    return (WriteHole new_hole)
 
 readChan :: Chan a -> IO (Maybe a)
-readChan EChan{..} = modifyMVar hasOutput $ \ isReady -> 
-  if isReady
-  then do
-	result <- C.readChan channel
-	case result of
-	  Msg result -> return (True, Just result)
-	  Term -> return (False, Nothing)
-  else return (False, Nothing)
+readChan (Chan readVar _) = modifyMVar readVar $ \ read_end -> do
+    next <- takeMVar read_end
+    case next of
+      ChEnd	-> do
+	putMVar read_end ChEnd
+	return (read_end, Nothing)
+      ChItem a next_read_end -> do
+	return (next_read_end, Just a)
 
 terminateChan :: Chan a -> IO ()
-terminateChan EChan{..} = modifyMVar_ acceptsInput $ \ isReady -> do
-  when isReady (C.writeChan channel Term)
-  return False
+terminateChan (Chan _ writeVar) = modifyMVar_ writeVar $ \ writeEnd -> case writeEnd of
+  WriteHole old_hole -> do
+    putMVar old_hole ChEnd
+    return StreamEnd
+  StreamEnd -> return StreamEnd
 
 isEmptyChan :: Chan a -> IO Bool
-isEmptyChan EChan{hasOutput} = liftM not (readMVar hasOutput)
+isEmptyChan (Chan readVar _) = withMVar readVar $ \ read_end -> withMVar read_end $ \ next -> case next of
+  ChEnd	-> return True
+  _	-> return False
