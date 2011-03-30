@@ -42,8 +42,13 @@ testIf = printTestCase "conditional" $ \ xs -> monadicIO $ do
   ys <- run (runMRParallel arrow xs)
   stop (equalsUnordered ys [if even x then x `quot` 2 :: Integer else 3 * x + 1 | x <- xs])
 
+testMapCombine :: Property
+testMapCombine = printTestCase "mapCombine" $ \ xs -> monadicIO $ do
+  ys <- run (runMRParallel (mapCombine (^2) (+)) xs :: IO [Integer])
+  stop (equalsUnordered ys (if null xs then [] else [sum [x^2 | x <- xs]]))
+
 tests :: Property
-tests = conjoin [testSide, testComposition, testIf]
+tests = conjoin [testSide, testComposition, testIf, testMapCombine]
 
 main :: IO ()
-main = quickCheck tests
+main = mapM_ (quickCheckWith stdArgs{maxSize = 10000}) [testMapCombine]
