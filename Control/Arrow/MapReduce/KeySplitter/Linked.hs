@@ -1,5 +1,5 @@
 {-# LANGUAGE GADTs #-}
-module Control.Arrow.MapReduce.KeySplitter where
+module Control.Arrow.MapReduce.KeySplitter.Linked where
 
 import Control.Sink.Class
 import Control.Monad

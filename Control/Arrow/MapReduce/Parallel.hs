@@ -1,10 +1,10 @@
-{-# LANGUAGE Rank2Types #-}
-module Control.Arrow.MapReduce.Parallel (MRParallel) where
+{-# LANGUAGE Rank2Types, TupleSections #-}
+module Control.Arrow.MapReduce.Parallel (MRParallel, runMRParallel) where
 
 import Control.Arrow.MapReduce.Class
 import Control.Arrow.MapReduce.Types
 import Control.Arrow.MapReduce.Sharder
-import Control.Arrow.MapReduce.KeySplitter
+import Control.Arrow.MapReduce.KeySplitter.Linked
 
 import Control.Category
 import Control.Cofunctor
@@ -26,10 +26,21 @@ import qualified Data.Vector as V
 
 import Prelude hiding ((.), unzip)
 
-newtype MRParallel input output = MRParallel (forall x . 
+newtype MRParallel input output = MRParallel {run :: forall x . 
   MRSource (x, input)
   -> MRSink (x, output)
-  -> IO (IO ())) -- returns a "wait till done" command
+  -> IO (IO ())} -- returns a "wait till done" command
+
+runMRParallel :: MRParallel a b -> [a] -> IO [b]
+runMRParallel m xs = do
+  (writeIn0, readIn) <- newPipe
+  (writeOut, readOut0) <- newPipe
+  let writeIn = cofmap ((),) writeIn0
+  let readOut = fmap snd readOut0
+  finish <- run m readIn writeOut
+  mapM_ (emit writeIn) xs
+  finish
+  consumeSource readOut
 
 instance Category MRParallel where
   id = MRParallel $ \ input output -> do
@@ -167,4 +178,3 @@ reducer theReduce = MRParallel $ \ input output -> do
     reportEnd shardOut
     putMVar sem ()
   return (waitForBarrier barrier)
-    
