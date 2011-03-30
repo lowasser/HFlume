@@ -1,4 +1,4 @@
-{-# LANGUAGE Rank2Types, TupleSections #-}
+{-# LANGUAGE Rank2Types, TupleSections, FlexibleInstances, MultiParamTypeClasses #-}
 module Control.Arrow.MapReduce.Parallel (MRParallel, runMRParallel) where
 
 import Control.Arrow.MapReduce.Class
@@ -9,7 +9,7 @@ import Control.Arrow.MapReduce.KeySplitter.Linked
 import Control.Category
 import Control.Cofunctor
 import Control.Arrow
-import Control.Monad hiding (replicateM)
+import Control.Monad
 import Control.Exception
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
@@ -21,6 +21,7 @@ import Control.Source.Class
 
 import GHC.Conc
 
+import Data.Hashable
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 
@@ -119,17 +120,22 @@ asum pipelines = MRParallel $ \ input output -> do
 mapper :: Int -> Mapper a k b -> MRParallel a (k, b)
 mapper nMappers theMap = MRParallel $ \ input output -> do
   sem <- newEmptyMVar
-  outputs <- fanN nMappers output
-  forM_ outputs $ \ myOut -> forkIO $ do
+  forM_ [0..nMappers-1] $ flip forkOnIO $ do
+    myOut <- fan' output
     theMap input myOut
     putMVar sem ()
-  return (replicateM_ nMappers (takeMVar sem))
+  return (replicateM_ nMappers (takeMVar sem) >> reportEnd output)
 
-reducer :: Eq k => Reducer k a b -> MRParallel (k, a) b
-reducer theReduce = MRParallel $ \ input output -> do
+instance (Eq k, Hashable k) => ArrowMapReduce MRParallel k where
+  mapManyReduce buckets theMapper theReducer = MRParallel $ \ input output -> do
+    (shardPipes, shardBarriers) <- liftM V.unzip $ V.replicateM buckets (makeReducerSplitter theReducer output)
+    mapTerm <- run (mapper numCapabilities theMapper) input (MRSink $ Sharder shardPipes)
+    return (mapTerm >> V.mapM_ waitForBarrier shardBarriers >> reportEnd output)
+
+makeReducerSplitter :: Eq k => Reducer k a b -> MRSink (x, b) -> IO (MRSink (x, (k, a)), Barrier)
+makeReducerSplitter theReduce output = do
   barrier <- newBarrier
-  addBarrier barrier (reportEnd output)
-  shardOut <- newKeySplitter $ \ k -> do
+  splitter <- newKeySplitter $ \ k -> do
     (kSnk, kSrc) <- newPipe
     kOut <- fan' output
     kSem <- newEmptyMVar
@@ -138,10 +144,4 @@ reducer theReduce = MRParallel $ \ input output -> do
       theReduce k kSrc kOut
       putMVar kSem ()
     return kSnk
-  sem <- newEmptyMVar
-  addBarrier barrier (takeMVar sem)
-  forkIO $ do
-    mapSourceM_ (emit shardOut) input
-    reportEnd shardOut
-    putMVar sem ()
-  return (waitForBarrier barrier)
+  return (MRSink splitter, barrier)

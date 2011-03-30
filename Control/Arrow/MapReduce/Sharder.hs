@@ -11,11 +11,11 @@ import Control.Sink.Class
 import Prelude hiding (length, mapM_)
 
 data Sharder f a where
-  Sharder :: Hashable k => !(Vector (f (k, x, a)))
-    -> Sharder f (k, x, a)
+  Sharder :: Hashable k => !(Vector (f (x, (k, a))))
+    -> Sharder f (x, (k, a))
 
 instance Sink f => Sink (Sharder f) where
-  emit (Sharder shards) x@(k, _, _) = 
+  emit (Sharder shards) x@(_, (k, _)) = 
     emit (shards ! (abs (hash k) `rem` length shards))
       x
   reportEnd (Sharder shards) = mapM_ reportEnd shards
