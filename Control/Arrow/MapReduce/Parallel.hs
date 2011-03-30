@@ -24,7 +24,7 @@ import GHC.Conc
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 
-import Prelude hiding ((.), unzip)
+import Prelude hiding ((.))
 
 newtype MRParallel input output = MRParallel {run :: forall x . 
   MRSource (x, input)
@@ -43,14 +43,13 @@ runMRParallel m xs = do
   finish
   consumeSource readOut
 
+instance Functor (MRParallel a) where
+  fmap f m = MRParallel $ \ input output ->
+    run m input (cofmap (fmap f) output)
+
 instance Category MRParallel where
-  id = MRParallel $ \ input output -> do
-    flag <- newEmptyMVar
-    forkIO $ do
-      mapSourceM_ (emit output) input
-      reportEnd output
-      putMVar flag ()
-    return (takeMVar flag)
+  id = MRParallel $ \ input output -> 
+    liftM (>> reportEnd output) $ workers (emit output) input
   MRParallel f . MRParallel g = MRParallel $ \ input output -> do
     (gOut, fIn) <- newPipe
     gDone <- g input gOut
@@ -58,17 +57,11 @@ instance Category MRParallel where
     return (gDone >> fDone)
 
 wrap :: (a -> b) -> (c -> d) -> MRParallel b c -> MRParallel a d
-wrap f g (MRParallel run) = MRParallel $ \ input output ->
-  run (fmap (fmap f) input) (cofmap (fmap g) output)
+wrap f g m = MRParallel $ \ input output ->
+  run m (fmap (fmap f) input) (cofmap (fmap g) output)
 
 instance Arrow MRParallel where
-  arr f = MRParallel $ \ input output -> do -- not strict
-    flag <- newEmptyMVar
-    forkIO $ do
-      mapSourceM_ (emit output . fmap f) input
-      reportEnd output
-      putMVar flag ()
-    return (takeMVar flag)
+  arr f = MRParallel $ \ input output -> liftM (>> reportEnd output) $ workers (emit output . fmap f) input
   first (MRParallel run) = MRParallel $ \ input output ->
     let runSource = fmap (\ (x, (a, b)) -> ((x, b), a)) input
 	runOutput = cofmap (\ ((x, b), a) -> (x, (a, b))) output
@@ -79,76 +72,49 @@ instance Arrow MRParallel where
     in run runSource runOutput
 
 instance ArrowChoice MRParallel where
-  left (MRParallel run) = MRParallel $ \ input output -> do
-    inSem <- newEmptyMVar
-    (leftOut, runSource) <- newPipe
-    (outL, outR) <- fan output
-    let runOutput = cofmap (fmap Left) outL
-    forkIO $ do
-      mapSourceM_ (\ (x, i) -> case i of
-	Left a	-> emit leftOut (x, a)
-	Right b	-> emit outR (x, Right b)) input
-      reportEnd outR
-      putMVar inSem ()
-    leftTerm <- run runSource runOutput
-    return (takeMVar inSem >> leftTerm)
-  right (MRParallel run) = MRParallel $ \ input output -> do
-    inSem <- newEmptyMVar
-    (rightOut, runSource) <- newPipe
-    (outL, outR) <- fan output
-    let runOutput = cofmap (fmap Right) outR
-    forkIO $ do
-      mapSourceM_ (\ (x, i) -> case i of
-	Right a	-> emit rightOut (x, a)
-	Left b	-> emit outL (x, Left b)) input
-      reportEnd outL
-      putMVar inSem ()
-    rightTerm <- run runSource runOutput
-    return (takeMVar inSem >> rightTerm)
-  MRParallel runLeft +++ MRParallel runRight = MRParallel $ \ input output -> do
-    inSem <- newEmptyMVar
+  left m = MRParallel $ \ input output -> do
     (leftPipe, leftIn) <- newPipe
-    (rightPipe, rightIn) <- newPipe
-    (leftOut0, rightOut0) <- fan output
-    let leftOut = cofmap (fmap Left) leftOut0
-	rightOut = cofmap (fmap Right) rightOut0
-    forkIO $ do
-      mapSourceM_ (\ (x, i) -> case i of
+    (outL, outR) <- fan output
+    inTerm <- workers (\ (x, i) -> case i of
 	Left a	-> emit leftPipe (x, a)
-	Right b	-> emit rightPipe (x, b)) input
-      putMVar inSem ()
-    leftTerm <- runLeft leftIn leftOut
-    rightTerm <- runRight rightIn rightOut
-    return (takeMVar inSem >> leftTerm >> rightTerm)
+	Right b	-> emit outR (x, Right b)) input
+    mTerm <- run (fmap Left m) leftIn outL
+    return $ sequence_ [inTerm, reportEnd leftPipe, reportEnd outR, mTerm]
+  right m = MRParallel $ \ input output -> do
+    (rightPipe, rightIn) <- newPipe
+    (outL, outR) <- fan output
+    inTerm <- workers (\ (x, i) -> case i of
+	Right a	-> emit rightPipe (x, a)
+	Left b	-> emit outL (x, Left b)) input
+    mTerm <- run (fmap Right m) rightIn outR
+    return $ sequence_ [inTerm, reportEnd rightPipe, reportEnd outL, mTerm]
+  l +++ r = fmap Left l ||| fmap Right r
   MRParallel runLeft ||| MRParallel runRight = MRParallel $ \ input output -> do
-    inSem <- newEmptyMVar
     (leftPipe, leftIn) <- newPipe
     (rightPipe, rightIn) <- newPipe
     (leftOut, rightOut) <- fan output
-    forkIO $ do
-      mapSourceM_ (\ (x, i) -> case i of
+    inTerm <- workers (\ (x, i) -> case i of
 	Left a	-> emit leftPipe (x, a)
 	Right b	-> emit rightPipe (x, b)) input
-      putMVar inSem ()
     leftTerm <- runLeft leftIn leftOut
     rightTerm <- runRight rightIn rightOut
-    return (takeMVar inSem >> leftTerm >> rightTerm)
+    return (sequence_ [inTerm, reportEnd leftPipe, reportEnd rightPipe, leftTerm, rightTerm])
 
 instance ArrowZero MRParallel where
   zeroArrow = MRParallel $ \ _ _ -> return (return ())
 
 instance ArrowPlus MRParallel where
-  MRParallel run1 <+> MRParallel run2 = MRParallel $ \ input output -> do
-    (pipe1, in1) <- newPipe
-    (pipe2, in2) <- newPipe
-    inSem <- newEmptyMVar
-    forkIO $ do
-      mapSourceM_ (\ a -> emit pipe1 a >> emit pipe2 a) input
-      putMVar inSem ()
-    (out1, out2) <- fan output
-    term1 <- run1 in1 out1
-    term2 <- run2 in2 out2
-    return (takeMVar inSem >> term1 >> term2)
+  m <+> k = asum [m, k]
+
+asum :: [MRParallel a b] -> MRParallel a b
+asum pipelines = MRParallel $ \ input output -> do
+  (pipes, terms) <- liftM unzip $ forM pipelines $ \ pipeline -> do
+    (pipe, lineIn) <- newPipe
+    lineOut <- fan' output
+    term <- run pipeline lineIn lineOut
+    return (pipe, term)
+  inTerm <- workers (\ a -> mapM_ (`emit` a) pipes) input
+  return $ sequence_ [inTerm, mapM_ reportEnd pipes, sequence_ terms, reportEnd output]
 
 mapper :: Int -> Mapper a k b -> MRParallel a (k, b)
 mapper nMappers theMap = MRParallel $ \ input output -> do

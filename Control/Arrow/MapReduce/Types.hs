@@ -2,10 +2,14 @@
 module Control.Arrow.MapReduce.Types where
 
 import Control.Concurrent.Chan.Endable
+import Control.Concurrent.MVar
 import Control.Source
 import Control.Sink
 import Control.Cofunctor
+import Control.Monad
 import qualified Control.Sink as Sink
+
+import GHC.Conc
 
 data MRSource a where
   MRSource :: Source src => src a -> MRSource a
@@ -21,6 +25,7 @@ instance Source MRSource where
   tryGet (MRSource src) = tryGet src
   isExhausted (MRSource src) = isExhausted src
 
+{-# INLINE newPipe #-}
 newPipe :: IO (MRSink a, MRSource a)
 newPipe = do
   ch <- newChan
@@ -44,3 +49,12 @@ fanN n (MRSink dst) = do
 
 fan' :: MRSink a -> IO (MRSink a)
 fan' (MRSink dst) = fmap MRSink (Sink.fan' dst)
+
+workers :: (a -> IO b) -> MRSource a -> IO (IO ())
+workers k (MRSource src) = do
+  sem <- newEmptyMVar
+  let nWorkers = numCapabilities
+  forM_ [0..nWorkers-1] $ flip forkOnIO $ do
+    mapSourceM_ k src
+    putMVar sem ()
+  return (replicateM_ nWorkers (takeMVar sem))

@@ -33,8 +33,17 @@ testSide = printTestCase "side" $ \ xs -> monadicIO $ do
   ys <- run (runMRParallel arrow xs)
   stop (equalsUnordered ys [(x + 1) + (x + 2 :: Integer) | x <- xs])
 
+testIf :: Property
+testIf = printTestCase "conditional" $ \ xs -> monadicIO $ do
+  let arrow = proc x -> do
+	  if even x
+	    then returnA -< x `quot` 2
+	    else returnA -< 3 * x + 1
+  ys <- run (runMRParallel arrow xs)
+  stop (equalsUnordered ys [if even x then x `quot` 2 :: Integer else 3 * x + 1 | x <- xs])
+
 tests :: Property
-tests = conjoin [testSide, testComposition]
+tests = conjoin [testSide, testComposition, testIf]
 
 main :: IO ()
 main = quickCheck tests
