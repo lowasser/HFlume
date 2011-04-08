@@ -18,6 +18,9 @@ import Prelude hiding ((.), id)
 
 newtype Flume s a = Flume (UniqueT Identity a) deriving (Monad)
 
+newID :: Flume s UniqueId
+newID = Flume newUnique
+
 execFlume :: (forall s . Flume s a) -> a
 execFlume (Flume m) = runIdentity $ execUniqueT m
 
@@ -29,10 +32,12 @@ instance Applicative (Flume s) where
   (<*>) = ap
 
 data PCollection s a where
-  Explicit :: !UniqueId -> Vector a -> PCollection s a
+  Explicit :: !UniqueId -> !(Vector a) -> PCollection s a
   Parallel :: !UniqueId -> PDo s a b -> PCollection s a -> PCollection s b
-  Flatten :: !UniqueId -> [PCollection s a] -> PCollection s a
+  Flatten :: !UniqueId -> !(Vector (PCollection s a)) -> PCollection s a
   GroupByKeyOneShot :: (Eq k, Hashable k) => !UniqueId -> PCollection s (k, a) -> PCollection s (k, OneShot s a)
+
+type PTable s k a = PCollection s (k, a)
 
 getPCollID :: PCollection s a -> UniqueId
 getPCollID (Explicit i _) = i
@@ -54,8 +59,12 @@ data OneShot s a = OneShot {runOneShot :: forall b . (b -> a -> b) -> b -> b}
 toOneShot :: [a] -> OneShot s a
 toOneShot xs = OneShot (\ f z -> L.foldl f z xs)
 
+mconcatOneShot :: Monoid a => OneShot s a -> a
+mconcatOneShot xs = runOneShot xs mappend mempty
+
 data PDo s a b where
   Identity :: PDo s a a
+  OnValues :: !UniqueId -> PDo s a b -> PDo s (k, a) (k, b)
   Map :: !UniqueId -> (a -> b) -> PDo s a b
   MapMaybe :: !UniqueId -> (a -> Maybe b) -> PDo s a b
   ConcatMap :: !UniqueId -> (a -> [b]) -> PDo s a b
@@ -67,6 +76,7 @@ getPDoID :: PDo s a b -> UniqueId
 getPDoID (Map i _) = i
 getPDoID (MapMaybe i _) = i
 getPDoID (ConcatMap i _) = i
+getPDoID (OnValues i _) = i
 getPDoID _ = undefined
 
 pdoEq :: PDo s a b -> PDo s c d -> Bool
