@@ -36,6 +36,7 @@ seqExecObj (Concat _ c) = fmap mconcat (seqExecColl c)
 seqExecColl :: PCollection s a -> Flume s [a]
 seqExecColl (Parallel _ pdo c) =
   seqExecPDo pdo (runFlume $ seqExecColl c)
+seqExecColl (Flatten _ cs) = return $ concatMap (runFlume . seqExecColl) cs
 seqExecColl (Explicit _ xs) = return (toList xs)
 seqExecColl (GroupByKeyOneShot _ ungrouped) = do
   xs <- seqExecColl ungrouped

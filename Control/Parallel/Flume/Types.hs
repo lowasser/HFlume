@@ -14,11 +14,13 @@ import Prelude hiding ((.), id)
 data PCollection s a where
   Explicit :: !UniqueId -> Vector a -> PCollection s a
   Parallel :: !UniqueId -> PDo s a b -> PCollection s a -> PCollection s b
+  Flatten :: !UniqueId -> [PCollection s a] -> PCollection s a
   GroupByKeyOneShot :: (Eq k, Hashable k) => !UniqueId -> PCollection s (k, a) -> PCollection s (k, OneShot s a)
 
 getPCollID :: PCollection s a -> UniqueId
 getPCollID (Explicit i _) = i
 getPCollID (Parallel i _ _) = i
+getPCollID (Flatten i _) = i
 getPCollID (GroupByKeyOneShot i _) = i
 
 instance Eq (PCollection s a) where
