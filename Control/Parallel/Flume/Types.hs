@@ -36,10 +36,24 @@ data PCollection s a where
   Parallel :: !UniqueId -> PDo s a b -> PCollection s a -> PCollection s b
   Flatten :: !UniqueId -> !(Vector (PCollection s a)) -> PCollection s a
   GroupByKeyOneShot :: (Eq k, Hashable k) => !UniqueId -> PCollection s (k, a) -> PCollection s (k, OneShot s a)
+  MSCR :: (Eq k, Hashable k) =>
+    !UniqueId -> PCollection s a -> Mapper s a k b -> Reducer s k b c -> PCollection s c
+
+newtype Mapper s a k b = Mapper {runMapper :: a -> [(k, b)]}
+data Reducer s k a b where
+  Combine :: (a -> a -> a) -> (k -> a -> [b]) -> Reducer s k a b
+  Reduce :: (k -> OneShot s a -> [b]) -> Reducer s k a b
+
+runReducer :: Reducer s k a b -> k -> OneShot s a -> [b]
+runReducer Combine{} _ (OneShot []) = []
+runReducer (Combine (*) done) k (OneShot xs) =
+  done k (L.foldl1' (*) xs)
+runReducer (Reduce reduce) k xs = reduce k xs
 
 type PTable s k a = PCollection s (k, a)
 
 getPCollID :: PCollection s a -> UniqueId
+getPCollID (MSCR i _ _ _) = i
 getPCollID (Explicit i _) = i
 getPCollID (Parallel i _ _) = i
 getPCollID (Flatten i _) = i
@@ -54,13 +68,13 @@ instance Ord (PCollection s a) where
 instance Hashable (PCollection s a) where
   hashWithSalt salt coll = hashWithSalt salt (getPCollID coll)
 
-data OneShot s a = OneShot {runOneShot :: forall b . (b -> a -> b) -> b -> b}
+newtype OneShot s a = OneShot [a]
 
 toOneShot :: [a] -> OneShot s a
-toOneShot xs = OneShot (\ f z -> L.foldl f z xs)
+toOneShot xs = OneShot xs
 
 mconcatOneShot :: Monoid a => OneShot s a -> a
-mconcatOneShot xs = runOneShot xs mappend mempty
+mconcatOneShot (OneShot xs) = mconcat xs
 
 data PDo s a b where
   Identity :: PDo s a a

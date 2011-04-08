@@ -32,6 +32,16 @@ seqExecColl (GroupByKeyOneShot _ ungrouped) = do
   xs <- seqExecColl ungrouped
   let m = foldr (\ (k, a) -> HM.insertWith (\ _ old -> a:old) k [a]) HM.empty xs
   return (HM.toList $ fmap toOneShot m)
+seqExecColl (MSCR _ coll mapper reducer) = do
+  mappedId <- newID
+  doFnId <- newID
+  let mappedColl = Parallel mappedId (ConcatMap doFnId (runMapper mapper)) coll
+  groupedId <- newID
+  let groupedColl = GroupByKeyOneShot groupedId mappedColl
+  finalId <- newID
+  doFnId' <- newID
+  let finalColl = Parallel finalId (ConcatMap doFnId' (\ (k, xs) -> runReducer reducer k xs)) groupedColl
+  seqExecColl finalColl
 
 seqExecPDo1 :: PDo s a b -> a -> Flume s [b]
 seqExecPDo1 Identity x = return [x]
