@@ -11,19 +11,21 @@ import Data.Vector (toList)
 import qualified Data.HashMap.Strict as HM
 
 execFlumeSequential :: (forall s . Flume s (PObject s a)) -> a
-execFlumeSequential m = runFlume (seqExecObj (runFlume m))
+execFlumeSequential m = execFlume (m >>= seqExecObj)
 
 seqExecObj :: PObject s a -> Flume s a
-seqExecObj (Literal _ a) = return a
-seqExecObj (Sequential _ c) = seqExecColl c
-seqExecObj (MapOb _ f ob) = fmap f (seqExecObj ob)
-seqExecObj (Operate _ f x) = seqExecObj f <*> seqExecObj x
-seqExecObj (Concat _ c) = fmap mconcat (seqExecColl c)
+seqExecObj obj = case obj of
+    Literal _ a -> return a
+    Sequential _ c -> seqExecColl c
+    MapOb _ f ob -> liftM f (seqExecObj ob)
+    Operate _ f x -> seqExecObj f <*> seqExecObj x
+    Concat _ c -> liftM mconcat (seqExecColl c)
 
 seqExecColl :: PCollection s a -> Flume s [a]
-seqExecColl (Parallel _ pdo c) =
-  seqExecPDo pdo (runFlume $ seqExecColl c)
-seqExecColl (Flatten _ cs) = return $ concatMap (runFlume . seqExecColl) cs
+seqExecColl (Parallel _ pdo c) = do
+  xs <- seqExecColl c
+  seqExecPDo pdo xs
+seqExecColl (Flatten _ cs) = liftM concat $ mapM seqExecColl cs
 seqExecColl (Explicit _ xs) = return (toList xs)
 seqExecColl (GroupByKeyOneShot _ ungrouped) = do
   xs <- seqExecColl ungrouped

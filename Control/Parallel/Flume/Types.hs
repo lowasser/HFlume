@@ -1,10 +1,13 @@
-{-# LANGUAGE GADTs, EmptyDataDecls, TupleSections, Rank2Types #-}
+{-# LANGUAGE GADTs, EmptyDataDecls, TupleSections, Rank2Types, GeneralizedNewtypeDeriving #-}
 module Control.Parallel.Flume.Types where
 
 import Control.Parallel.Flume.Unique
 
-import Control.Category
 import Control.Applicative
+import Control.Category
+import Control.Monad
+
+import Data.Functor.Identity (Identity, runIdentity)
 
 import Data.Vector
 import Data.Maybe
@@ -13,18 +16,17 @@ import Data.Hashable
 import qualified Data.List as L
 import Prelude hiding ((.), id)
 
-newtype Flume s a = Flume {runFlume :: a}
+newtype Flume s a = Flume (UniqueT Identity a) deriving (Monad)
+
+execFlume :: (forall s . Flume s a) -> a
+execFlume (Flume m) = runIdentity $ execUniqueT m
 
 instance Functor (Flume s) where
-  fmap f (Flume a) = Flume (f a)
+  fmap = liftM
 
 instance Applicative (Flume s) where
-  pure = Flume
-  Flume f <*> Flume x = Flume (f x)
-
-instance Monad (Flume s) where
-  return = Flume
-  m >>= k = k (runFlume m)
+  pure = return
+  (<*>) = ap
 
 data PCollection s a where
   Explicit :: !UniqueId -> Vector a -> PCollection s a
