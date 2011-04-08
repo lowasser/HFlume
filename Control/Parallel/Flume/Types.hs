@@ -8,14 +8,19 @@ import Control.Monad
 import Data.Vector
 import Data.Maybe
 import Data.Monoid
+import Data.Hashable
+import qualified Data.List as L
 import Prelude hiding ((.), id)
 
 data PCollection s a where
   Explicit :: Vector a -> PCollection s a
   Parallel :: PDo s a b -> PCollection s a -> PCollection s b
-  GroupByKeyOneShot :: Eq k => PCollection s (k, a) -> PCollection s (k, OneShot s a)
+  GroupByKeyOneShot :: (Eq k, Hashable k) => PCollection s (k, a) -> PCollection s (k, OneShot s a)
 
 data OneShot s a = OneShot {runOneShot :: forall b . (b -> a -> b) -> b -> b}
+
+toOneShot :: [a] -> OneShot s a
+toOneShot xs = OneShot (\ f z -> L.foldl f z xs)
 
 data PDo s a b where
   Map :: (a -> b) -> PDo s a b
