@@ -4,12 +4,27 @@ module Control.Parallel.Flume.Types where
 import Control.Parallel.Flume.Unique
 
 import Control.Category
+import Control.Applicative
+
 import Data.Vector
 import Data.Maybe
 import Data.Monoid
 import Data.Hashable
 import qualified Data.List as L
 import Prelude hiding ((.), id)
+
+newtype Flume s a = Flume {runFlume :: a}
+
+instance Functor (Flume s) where
+  fmap f (Flume a) = Flume (f a)
+
+instance Applicative (Flume s) where
+  pure = Flume
+  Flume f <*> Flume x = Flume (f x)
+
+instance Monad (Flume s) where
+  return = Flume
+  m >>= k = k (runFlume m)
 
 data PCollection s a where
   Explicit :: !UniqueId -> Vector a -> PCollection s a

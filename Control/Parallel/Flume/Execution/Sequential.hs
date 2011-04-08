@@ -1,5 +1,5 @@
 {-# LANGUAGE Rank2Types, GADTs #-}
-module Control.Parallel.Flume.Monad where
+module Control.Parallel.Flume.Execution.Sequential where
 
 import Control.Parallel.Flume.Types
 
@@ -9,19 +9,6 @@ import Control.Monad
 import Data.Monoid
 import Data.Vector (toList)
 import qualified Data.HashMap.Strict as HM
-
-newtype Flume s a = Flume {runFlume :: a}
-
-instance Functor (Flume s) where
-  fmap f (Flume a) = Flume (f a)
-
-instance Applicative (Flume s) where
-  pure = Flume
-  Flume f <*> Flume x = Flume (f x)
-
-instance Monad (Flume s) where
-  return = Flume
-  m >>= k = k (runFlume m)
 
 execFlumeSequential :: (forall s . Flume s (PObject s a)) -> a
 execFlumeSequential m = runFlume (seqExecObj (runFlume m))
