@@ -16,6 +16,20 @@ data PCollection s a where
   Parallel :: !UniqueId -> PDo s a b -> PCollection s a -> PCollection s b
   GroupByKeyOneShot :: (Eq k, Hashable k) => !UniqueId -> PCollection s (k, a) -> PCollection s (k, OneShot s a)
 
+getPCollID :: PCollection s a -> UniqueId
+getPCollID (Explicit i _) = i
+getPCollID (Parallel i _ _) = i
+getPCollID (GroupByKeyOneShot i _) = i
+
+instance Eq (PCollection s a) where
+  x == y = getPCollID x == getPCollID y
+
+instance Ord (PCollection s a) where
+  compare x y = compare (getPCollID x) (getPCollID y)
+
+instance Hashable (PCollection s a) where
+  hashWithSalt salt coll = hashWithSalt salt (getPCollID coll)
+
 data OneShot s a = OneShot {runOneShot :: forall b . (b -> a -> b) -> b -> b}
 
 toOneShot :: [a] -> OneShot s a
@@ -28,6 +42,30 @@ data PDo s a b where
   ConcatMap :: !UniqueId -> (a -> [b]) -> PDo s a b
   (:<<:) :: PDo s b c -> PDo s a b -> PDo s a c {- the right operation is never a sequence -}
   -- TODO: side inputs
+
+{-# INLINE getPDoID #-}
+getPDoID :: PDo s a b -> UniqueId
+getPDoID (Map i _) = i
+getPDoID (MapMaybe i _) = i
+getPDoID (ConcatMap i _) = i
+getPDoID _ = undefined
+
+pdoEq :: PDo s a b -> PDo s c d -> Bool
+pdoEq Identity Identity = True
+pdoEq Identity _ = False
+pdoEq _ Identity = False
+pdoEq (f :<<: g) (h :<<: k) = pdoEq f h && pdoEq g k
+pdoEq (_ :<<: _) _ = False
+pdoEq _ (_ :<<: _) = False
+pdoEq pdo1 pdo2 = getPDoID pdo1 == getPDoID pdo2
+
+instance Eq (PDo s a b) where
+  (==) = pdoEq
+
+instance Hashable (PDo s a b) where
+  hashWithSalt salt Identity = salt
+  hashWithSalt salt (f :<<: g) = hashWithSalt (hashWithSalt salt f) g
+  hashWithSalt salt pdo = hashWithSalt salt (getPDoID pdo)
 
 instance Category (PDo s) where
   id = Identity
@@ -42,3 +80,16 @@ data PObject s a where
   Sequential :: !UniqueId -> PCollection s a -> PObject s [a]
   Concat :: Monoid a => !UniqueId -> PCollection s a -> PObject s a
   Literal :: !UniqueId -> a -> PObject s a
+
+getPObjID :: PObject s a -> UniqueId
+getPObjID (Operate i _ _) = i
+getPObjID (MapOb i _ _) = i
+getPObjID (Sequential i _) = i
+getPObjID (Concat i _) = i
+getPObjID (Literal i _) = i
+
+instance Eq (PObject s a) where
+  o1 == o2 = getPObjID o1 == getPObjID o2
+
+instance Hashable (PObject s a) where
+  hashWithSalt salt obj = hashWithSalt salt (getPObjID obj)

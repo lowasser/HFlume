@@ -1,12 +1,14 @@
-{-# LANGUAGE MagicHash, UnboxedTuples #-}
+{-# LANGUAGE MagicHash, UnboxedTuples, GeneralizedNewtypeDeriving #-}
 {-# OPTIONS -funbox-strict-fields #-}
 module Control.Parallel.Flume.Unique (UniqueId, UniqueT, execUniqueT, newUnique) where
 
 import Control.Monad
 
+import Data.Hashable
+
 import GHC.Exts
 
-newtype UniqueId = Unique Int deriving (Eq, Ord)
+newtype UniqueId = Unique Int deriving (Eq, Ord, Hashable)
 
 data StrU a = StrU Int# a
 newtype UniqueT m a = UniqueT {runUniqueT :: Int# -> m (StrU a)}
