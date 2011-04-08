@@ -4,7 +4,6 @@ module Control.Parallel.Flume.Types where
 import Control.Parallel.Flume.Unique
 
 import Control.Applicative
-import Control.Category
 import Control.Monad
 
 import Data.Functor.Identity (Identity, runIdentity)
@@ -13,7 +12,6 @@ import Data.Vector
 import Data.Maybe
 import Data.Monoid
 import Data.Hashable
-import qualified Data.List as L
 import Prelude hiding ((.), id)
 
 newtype Flume s a = Flume (UniqueT Identity a) deriving (Monad)
@@ -34,21 +32,21 @@ instance Applicative (Flume s) where
 data PCollection s a where
   Explicit :: !UniqueId -> !(Vector a) -> PCollection s a
   Parallel :: !UniqueId -> PDo s a b -> PCollection s a -> PCollection s b
-  Flatten :: !UniqueId -> !(Vector (PCollection s a)) -> PCollection s a
-  GroupByKeyOneShot :: (Eq k, Hashable k) => !UniqueId -> PCollection s (k, a) -> PCollection s (k, OneShot s a)
+  Flatten :: !UniqueId -> [PCollection s a] -> PCollection s a
+  GroupByKey :: (Eq k, Hashable k) => !UniqueId -> PCollection s (k, a) -> PCollection s (k, OneShot s a)
   MSCR :: (Eq k, Hashable k) =>
     !UniqueId -> PCollection s a -> Mapper s a k b -> Reducer s k b c -> PCollection s c
 
 newtype Mapper s a k b = Mapper {runMapper :: a -> [(k, b)]}
-data Reducer s k a b where
-  Combine :: (a -> a -> a) -> (k -> a -> [b]) -> Reducer s k a b
-  Reduce :: (k -> OneShot s a -> [b]) -> Reducer s k a b
+newtype Reducer s k a b = Reducer {runReducer :: k -> [a] -> [b]}
 
-runReducer :: Reducer s k a b -> k -> OneShot s a -> [b]
-runReducer Combine{} _ (OneShot []) = []
-runReducer (Combine (*) done) k (OneShot xs) =
-  done k (L.foldl1' (*) xs)
-runReducer (Reduce reduce) k xs = reduce k xs
+execReducer :: Reducer s k a b -> k -> OneShot s a -> [b]
+execReducer m k (OneShot xs) = runReducer m k xs
+
+newtype OneShot s a = OneShot [a]
+
+collectOneShot :: OneShot s a -> [a]
+collectOneShot (OneShot xs) = xs
 
 type PTable s k a = PCollection s (k, a)
 
@@ -57,7 +55,7 @@ getPCollID (MSCR i _ _ _) = i
 getPCollID (Explicit i _) = i
 getPCollID (Parallel i _ _) = i
 getPCollID (Flatten i _) = i
-getPCollID (GroupByKeyOneShot i _) = i
+getPCollID (GroupByKey i _) = i
 
 instance Eq (PCollection s a) where
   x == y = getPCollID x == getPCollID y
@@ -68,20 +66,16 @@ instance Ord (PCollection s a) where
 instance Hashable (PCollection s a) where
   hashWithSalt salt coll = hashWithSalt salt (getPCollID coll)
 
-newtype OneShot s a = OneShot [a]
-
-toOneShot :: [a] -> OneShot s a
-toOneShot xs = OneShot xs
-
-mconcatOneShot :: Monoid a => OneShot s a -> a
-mconcatOneShot (OneShot xs) = mconcat xs
-
 data PDo s a b where
-  Identity :: PDo s a a
-  OnValues :: !UniqueId -> PDo s a b -> PDo s (k, a) (k, b)
   Map :: !UniqueId -> (a -> b) -> PDo s a b
+  MapValues :: !UniqueId -> (k -> a -> b) -> PDo s (k, a) (k, b)
   MapMaybe :: !UniqueId -> (a -> Maybe b) -> PDo s a b
+  MapMaybeValues :: !UniqueId -> (k -> a -> Maybe b) -> PDo s (k, a) (k, b)
   ConcatMap :: !UniqueId -> (a -> [b]) -> PDo s a b
+  ConcatMapValues :: !UniqueId -> (k -> a -> [b]) -> PDo s (k, a) (k, b)
+  Fold :: !UniqueId -> (b -> a -> b) -> b -> PDo s a b
+  CombineValues :: !UniqueId -> (k -> a -> a -> a) -> PDo s (k, OneShot s a) (k, a)
+  DoFn :: !UniqueId -> ([a] -> [b]) -> PDo s a b
   (:<<:) :: PDo s b c -> PDo s a b -> PDo s a c {- the right operation is never a sequence -}
   -- TODO: side inputs
 
@@ -90,13 +84,14 @@ getPDoID :: PDo s a b -> UniqueId
 getPDoID (Map i _) = i
 getPDoID (MapMaybe i _) = i
 getPDoID (ConcatMap i _) = i
-getPDoID (OnValues i _) = i
+getPDoID (DoFn i _) = i
+getPDoID (MapValues i _) = i
+getPDoID (MapMaybeValues i _) = i
+getPDoID (Fold i _ _) = i
+getPDoID (CombineValues i _) = i
 getPDoID _ = undefined
 
 pdoEq :: PDo s a b -> PDo s c d -> Bool
-pdoEq Identity Identity = True
-pdoEq Identity _ = False
-pdoEq _ Identity = False
 pdoEq (f :<<: g) (h :<<: k) = pdoEq f h && pdoEq g k
 pdoEq (_ :<<: _) _ = False
 pdoEq _ (_ :<<: _) = False
@@ -106,16 +101,8 @@ instance Eq (PDo s a b) where
   (==) = pdoEq
 
 instance Hashable (PDo s a b) where
-  hashWithSalt salt Identity = salt
   hashWithSalt salt (f :<<: g) = hashWithSalt (hashWithSalt salt f) g
   hashWithSalt salt pdo = hashWithSalt salt (getPDoID pdo)
-
-instance Category (PDo s) where
-  id = Identity
-  Identity . g = g
-  f . Identity = f
-  f . (g :<<: h) = (f . g) :<<: h
-  f . g = f :<<: g
 
 data PObject s a where
   Operate :: !UniqueId -> PObject s (a -> b) -> PObject s a -> PObject s b
